@@ -67,31 +67,29 @@ Output ONLY in the following DSL specification format. Do NOT use markdown code 
 SPECIFICATION FORMAT:
 # Name: <Precise Machine Name>
 # Description: <Formal language or function definition>
-# Algorithm: <Brief 1-3 sentence strategy explaining how the head scans, marks, and checks>
+# Algorithm: <Brief 1-sentence strategy>
 initial: q0
 accept: Q_a
 reject: Q_r
 blank: _
 default_input: <a short valid sample string>
 
-# Test Cases (Provide 2 to 4 valid inputs and 2 to 3 invalid inputs)
-test: <valid_input_1> -> accept (Explanation)
-test: <valid_input_2> -> accept (Explanation)
-test: <invalid_input_1> -> reject (Explanation)
-test: <invalid_input_2> -> reject (Explanation)
-
 # Transitions: fromState, readSymbol -> toState, writeSymbol, direction(L/R/S)
-<one transition per line in the format: qState, readSym -> nextState, writeSym, L/R/S>
+<one transition per line in the format: fromState, readSymbol -> toState, writeSymbol, direction>
+
+# Test Cases
+test: <valid_input_1> -> accept
+test: <invalid_input_1> -> reject
 
 RULES & CONVENTIONS:
-1. Always use 'Q_a' for the accept state and 'Q_r' for the reject state.
-2. Initial state must be 'q0'.
-3. Directions must be 'L' (left), 'R' (right), or 'S' (stay).
-4. Blank symbol is '_'.
-5. Every transition MUST be strictly deterministic (no two transitions with the same fromState and readSymbol).
-6. Provide ALL transitions needed so the machine never hangs in an unhandled state unexpectedly.
-7. If an input is rejected, either transition to Q_r or omit the transition so the machine halts non-accepting.
-8. Output ONLY the DSL.`;
+1. Put '# Transitions' IMMEDIATELY after 'default_input:'. Do NOT write test cases before transitions.
+2. Always use 'Q_a' for the accept state and 'Q_r' for the reject state.
+3. Initial state must be 'q0'.
+4. Directions must be 'L' (left), 'R' (right), or 'S' (stay).
+5. Blank symbol is '_'.
+6. Every transition MUST be strictly deterministic.
+7. Keep test cases short (1 line each, no long explanations).
+8. Output ONLY the DSL specification.`;
 }
 
 /**
@@ -248,6 +246,28 @@ export const OFFLINE_TEMPLATES: Array<{
   title: string;
   dsl: string;
 }> = [
+  {
+    keywords: ["1's complement", "1s complement", "one's complement", "ones complement", "1 complement"],
+    title: "Binary One's Complement Transducer",
+    dsl: `# Name: One's Complement Transducer
+# Description: Converts an unsigned binary number to its 1's complement by inverting every bit (0 -> 1, 1 -> 0).
+# Algorithm: Scan tape left-to-right. Replace each '0' with '1' and each '1' with '0'. When blank is reached, halt in accept state Q_a.
+initial: q0
+accept: Q_a
+reject: Q_r
+blank: _
+default_input: 10101
+
+# Transitions: fromState, readSymbol -> toState, writeSymbol, direction(L/R/S)
+q0, 0 -> q0, 1, R
+q0, 1 -> q0, 0, R
+q0, _ -> Q_a, _, S
+
+# Test Cases
+test: 10101 -> accept (Inverts to 01010)
+test: 000 -> accept (Inverts to 111)
+test: 111 -> accept (Inverts to 000)`,
+  },
   {
     keywords: ['equal 0 and 1', 'equal 0s and 1s', 'equal number of 0', '#0 = #1', '0s and 1s equal'],
     title: 'Equal Count of 0s and 1s: L = {w | #0(w) = #1(w)}',

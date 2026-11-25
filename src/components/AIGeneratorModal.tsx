@@ -40,6 +40,7 @@ const CURATED_PROBLEMS = [
   {
     category: 'Arithmetic & Transducers',
     problems: [
+      { label: "1's Complement", prompt: "Turing Machine transducer to compute the 1's complement of an unsigned binary number" },
       { label: "Two's Complement", prompt: "Turing Machine transducer to compute the 2's complement of an unsigned binary number" },
       { label: 'Binary Increment (+1)', prompt: 'Turing Machine that adds 1 to an unsigned binary number on tape' }
     ]
@@ -164,17 +165,38 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
     setStreamedDSL('');
     abortControllerRef.current = new AbortController();
 
-    // Safety timeout after 25 seconds
-    const timeoutId = setTimeout(() => {
+    // Inactivity timer: resets whenever a new chunk arrives
+    let inactivityTimer: any = null;
+    const resetInactivity = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          const fallback = findMatchingTemplate(problemInput);
+          if (fallback) {
+            setStreamedDSL(fallback);
+            setGenerationError('Slow model response. Auto-completed with verified machine.');
+          } else {
+            setGenerationError('Model was silent for 20s. Stopped.');
+          }
+          setIsGenerating(false);
+          setIsThinking(false);
+        }
+      }, 25000);
+    };
+
+    // Overall max timer: 90 seconds
+    const maxTimer = setTimeout(() => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
-        setGenerationError('Generation timed out. Switched to verified solution.');
         const fallback = findMatchingTemplate(problemInput);
         if (fallback) setStreamedDSL(fallback);
         setIsGenerating(false);
         setIsThinking(false);
       }
-    }, 25000);
+    }, 90000);
+
+    resetInactivity();
 
     try {
       const prompt = buildTuringMachinePrompt(problemInput.trim());
@@ -190,6 +212,7 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
           selectedModel,
           prompt,
           (chunk, isDone) => {
+            resetInactivity();
             accumulated += chunk;
             if (accumulated.includes('<think>') && !accumulated.includes('</think>')) {
               setIsThinking(true);
@@ -215,6 +238,7 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
           cloudModel.trim(),
           prompt,
           (chunk, isDone) => {
+            resetInactivity();
             accumulated += chunk;
             setStreamedDSL(accumulated);
             if (isDone) {
@@ -242,7 +266,8 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
         }
       }
     } finally {
-      clearTimeout(timeoutId);
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      clearTimeout(maxTimer);
       setIsGenerating(false);
       setIsThinking(false);
     }
