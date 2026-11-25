@@ -9,13 +9,15 @@ interface MachineEditorModalProps {
   onClose: () => void;
   currentConfig: TuringMachineConfig;
   onSaveConfig: (config: TuringMachineConfig) => void;
+  onSaveAsPreset?: (config: TuringMachineConfig) => void;
 }
 
 export const MachineEditorModal: React.FC<MachineEditorModalProps> = ({
   isOpen,
   onClose,
   currentConfig,
-  onSaveConfig
+  onSaveConfig,
+  onSaveAsPreset
 }) => {
   if (!isOpen) return null;
 
@@ -165,20 +167,43 @@ export const MachineEditorModal: React.FC<MachineEditorModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3 border-t border-zinc-200 bg-zinc-50 flex items-center justify-end gap-2.5">
-          <button
-            onClick={onClose}
-            className="px-3.5 py-1.5 rounded border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-700 text-xs font-medium transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={parseResult.errors.length > 0}
-            className="px-4 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-semibold transition-colors"
-          >
-            Save Machine
-          </button>
+        <div className="px-5 py-3 border-t border-zinc-200 bg-zinc-50 flex items-center justify-between gap-2.5">
+          <div>
+            {onSaveAsPreset && (
+              <button
+                onClick={() => {
+                  if (parseResult.config && parseResult.errors.length === 0) {
+                    onSaveAsPreset({
+                      ...parseResult.config,
+                      id: `custom_preset_${Date.now()}`,
+                      isCustom: true,
+                      testCases: currentConfig.testCases || []
+                    });
+                    onClose();
+                  }
+                }}
+                disabled={parseResult.errors.length > 0}
+                className="px-3 py-1.5 rounded border border-zinc-300 bg-white hover:bg-zinc-100 disabled:opacity-40 text-zinc-700 text-xs font-medium transition-colors"
+              >
+                Save as Preset
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="px-3.5 py-1.5 rounded border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-700 text-xs font-medium transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={parseResult.errors.length > 0}
+              className="px-4 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-semibold transition-colors"
+            >
+              Save Machine
+            </button>
+          </div>
         </div>
       </div>
     </div>

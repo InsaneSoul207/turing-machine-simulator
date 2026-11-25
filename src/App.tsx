@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TuringMachineConfig, MachineStatus, StepRecord, Transition, TestCase } from './types/tm';
+import { TuringMachineConfig, MachineStatus, StepRecord, Transition } from './types/tm';
 import { PRESETS } from './presets';
 import { initializeTape, executeStep, formatInstantaneousDescription, getTapeSymbol } from './utils/tmEngine';
 import { fireAcceptConfetti } from './utils/confetti';
@@ -13,8 +13,27 @@ import { TestRunner } from './components/TestRunner';
 import { StatusBanner } from './components/StatusBanner';
 import { MachineEditorModal } from './components/MachineEditorModal';
 import { GuideModal } from './components/GuideModal';
+import { AIGeneratorModal } from './components/AIGeneratorModal';
+import { NewPresetModal } from './components/NewPresetModal';
+import { Sparkles, BookmarkPlus } from 'lucide-react';
 
 export const App: React.FC = () => {
+  // Presets Library (Built-in + localStorage custom presets)
+  const [presets, setPresets] = useState<TuringMachineConfig[]>(() => {
+    try {
+      const saved = localStorage.getItem('turing_custom_presets');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return [...PRESETS, ...parsed];
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return PRESETS;
+  });
+
   const [config, setConfig] = useState<TuringMachineConfig>(PRESETS[0]);
   const [inputString, setInputString] = useState<string>(PRESETS[0].defaultInput || '');
   const [tape, setTape] = useState<Record<number, string>>(() =>
@@ -33,6 +52,8 @@ export const App: React.FC = () => {
   // Modals & Tabs
   const [isEditorOpen, setIsEditorOpen] = useState<boolean>(false);
   const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
+  const [isAIOpen, setIsAIOpen] = useState<boolean>(false);
+  const [isNewPresetOpen, setIsNewPresetOpen] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'graph' | 'table' | 'tests'>('graph');
 
   const timerRef = useRef<number | null>(null);
@@ -79,6 +100,43 @@ export const App: React.FC = () => {
     setConfig(newPreset);
     setInputString(newPreset.defaultInput || '');
     resetMachine(newPreset, newPreset.defaultInput || '');
+  };
+
+  // Preset Add / Save
+  const handleSaveNewPreset = (newPreset: TuringMachineConfig) => {
+    setPresets(prev => {
+      const filtered = prev.filter(p => p.id !== newPreset.id);
+      const updated = [...filtered, newPreset];
+      const customOnly = updated.filter(p => p.isCustom);
+      try {
+        localStorage.setItem('turing_custom_presets', JSON.stringify(customOnly));
+      } catch {
+        // storage quota
+      }
+      return updated;
+    });
+
+    setConfig(newPreset);
+    setInputString(newPreset.defaultInput || '');
+    resetMachine(newPreset, newPreset.defaultInput || '');
+  };
+
+  // Preset Delete
+  const handleDeletePreset = (id: string) => {
+    setPresets(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      const customOnly = updated.filter(p => p.isCustom);
+      try {
+        localStorage.setItem('turing_custom_presets', JSON.stringify(customOnly));
+      } catch {
+        // storage quota
+      }
+      return updated;
+    });
+
+    if (config.id === id) {
+      handleSelectPreset(PRESETS[0]);
+    }
   };
 
   // Perform one forward simulation step
@@ -369,9 +427,13 @@ export const App: React.FC = () => {
       {/* Top Header */}
       <Header
         currentConfig={config}
+        presets={presets}
         onSelectPreset={handleSelectPreset}
         onOpenEditor={() => setIsEditorOpen(true)}
         onOpenGuide={() => setIsGuideOpen(true)}
+        onOpenAI={() => setIsAIOpen(true)}
+        onOpenNewPreset={() => setIsNewPresetOpen(true)}
+        onDeletePreset={handleDeletePreset}
         onReset={() => resetMachine()}
         onExport={handleExport}
         onImport={handleImport}
@@ -386,10 +448,21 @@ export const App: React.FC = () => {
               <h2 className="text-base font-bold tracking-tight text-zinc-900 font-sans">
                 {config.name}
               </h2>
+              {config.isCustom && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                  Custom Preset
+                </span>
+              )}
             </div>
             <p className="text-xs text-zinc-500 mt-0.5 max-w-3xl">
               {config.description}
             </p>
+            {config.algorithmSummary && (
+              <p className="text-[11px] text-zinc-700 mt-1 max-w-3xl bg-zinc-100/80 px-2 py-1 rounded border border-zinc-200">
+                <span className="font-semibold text-zinc-900">💡 Algorithm: </span>
+                {config.algorithmSummary}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2 font-mono text-xs">
             <span className="text-zinc-500">Initial:</span>
@@ -399,6 +472,10 @@ export const App: React.FC = () => {
             <span className="text-zinc-500 ml-2">Accept:</span>
             <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200">
               {config.acceptStates.join(', ') || '∅'}
+            </span>
+            <span className="text-zinc-500 ml-2">Reject:</span>
+            <span className="px-2 py-0.5 rounded bg-rose-50 text-rose-800 font-semibold border border-rose-200">
+              {config.rejectStates.join(', ') || '∅'}
             </span>
           </div>
         </div>
@@ -531,6 +608,27 @@ export const App: React.FC = () => {
           setInputString(newConfig.defaultInput || '');
           resetMachine(newConfig, newConfig.defaultInput || '');
         }}
+        onSaveAsPreset={handleSaveNewPreset}
+      />
+
+      {/* New Preset Creator Modal */}
+      <NewPresetModal
+        isOpen={isNewPresetOpen}
+        onClose={() => setIsNewPresetOpen(false)}
+        currentConfig={config}
+        onSavePreset={handleSaveNewPreset}
+      />
+
+      {/* AI Turing Machine Architect Modal */}
+      <AIGeneratorModal
+        isOpen={isAIOpen}
+        onClose={() => setIsAIOpen(false)}
+        onLoadConfig={(newConfig) => {
+          setConfig(newConfig);
+          setInputString(newConfig.defaultInput || '');
+          resetMachine(newConfig, newConfig.defaultInput || '');
+        }}
+        onSaveAsPreset={handleSaveNewPreset}
       />
 
       {/* TOC Theory & Operation Guide Modal */}

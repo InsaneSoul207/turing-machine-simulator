@@ -1,4 +1,4 @@
-import { TuringMachineConfig, Transition, Direction } from '../types/tm';
+import { TuringMachineConfig, Transition, Direction, TestCase } from '../types/tm';
 
 export interface ParseResult {
   config: TuringMachineConfig | null;
@@ -15,6 +15,9 @@ export function stringifyConfigToDSL(config: TuringMachineConfig): string {
   if (config.description) {
     lines.push(`# Description: ${config.description}`);
   }
+  if (config.algorithmSummary) {
+    lines.push(`# Algorithm: ${config.algorithmSummary}`);
+  }
   lines.push(`initial: ${config.initialState}`);
   lines.push(`accept: ${config.acceptStates.join(', ')}`);
   if (config.rejectStates && config.rejectStates.length > 0) {
@@ -22,6 +25,15 @@ export function stringifyConfigToDSL(config: TuringMachineConfig): string {
   }
   lines.push(`blank: ${config.blankSymbol || '_'}`);
   lines.push(`default_input: ${config.defaultInput || ''}`);
+  
+  if (config.testCases && config.testCases.length > 0) {
+    lines.push('');
+    lines.push('# Test Cases');
+    config.testCases.forEach(tc => {
+      lines.push(`test: ${tc.input} -> ${tc.expected}${tc.description ? ` (${tc.description})` : ''}`);
+    });
+  }
+
   lines.push('');
   lines.push('# Transitions: fromState, readSymbol -> toState, writeSymbol, direction(L/R/S)');
 
@@ -41,11 +53,13 @@ export function parseDSLToConfig(text: string, id: string = 'custom'): ParseResu
 
   let name = 'Custom Turing Machine';
   let description = 'User-defined Turing Machine';
+  let algorithmSummary = '';
   let initialState = 'q0';
   let acceptStates: string[] = [];
   let rejectStates: string[] = [];
   let blankSymbol = '_';
   let defaultInput = '';
+  const testCases: TestCase[] = [];
   const transitions: Transition[] = [];
   const stateSet = new Set<string>();
   const alphabetSet = new Set<string>();
@@ -73,6 +87,9 @@ export function parseDSLToConfig(text: string, id: string = 'custom'): ParseResu
         name = line.substring(line.indexOf(':') + 1).trim();
       } else if (line.toLowerCase().includes('description:')) {
         description = line.substring(line.indexOf(':') + 1).trim();
+      } else if (line.toLowerCase().includes('algorithm:') || line.toLowerCase().includes('strategy:')) {
+        const algoText = line.substring(line.indexOf(':') + 1).trim();
+        algorithmSummary = algorithmSummary ? `${algorithmSummary} ${algoText}` : algoText;
       }
       return;
     }
@@ -102,6 +119,40 @@ export function parseDSLToConfig(text: string, id: string = 'custom'): ParseResu
     }
     if (lower.startsWith('default_input:') || lower.startsWith('input:')) {
       defaultInput = line.substring(line.indexOf(':') + 1).trim();
+      return;
+    }
+    if (lower.startsWith('test:')) {
+      // Format: test: input -> accept (description) or test: input, accept, description
+      const rawTest = line.substring(5).trim();
+      let testInput = '';
+      let testExpected: 'accept' | 'reject' | 'halt' = 'accept';
+      let testDesc = '';
+
+      if (rawTest.includes('->')) {
+        const [left, right] = rawTest.split('->').map(s => s.trim());
+        testInput = left;
+        const descMatch = right.match(/\((.*?)\)/);
+        if (descMatch) {
+          testDesc = descMatch[1].trim();
+        }
+        const expClean = right.replace(/\(.*?\)/, '').trim().toLowerCase();
+        if (expClean.includes('reject')) testExpected = 'reject';
+        else if (expClean.includes('halt')) testExpected = 'halt';
+        else testExpected = 'accept';
+      } else {
+        const parts = rawTest.split(',').map(s => s.trim());
+        testInput = parts[0] || '';
+        const expClean = (parts[1] || 'accept').toLowerCase();
+        testExpected = expClean.includes('reject') ? 'reject' : expClean.includes('halt') ? 'halt' : 'accept';
+        testDesc = parts[2] || '';
+      }
+
+      testCases.push({
+        id: `tc_${testCases.length + 1}_${Date.now()}`,
+        input: testInput,
+        expected: testExpected,
+        description: testDesc || (testExpected === 'accept' ? 'Valid input' : 'Invalid input')
+      });
       return;
     }
 
@@ -176,6 +227,7 @@ export function parseDSLToConfig(text: string, id: string = 'custom'): ParseResu
     id,
     name,
     description,
+    algorithmSummary: algorithmSummary || undefined,
     states: Array.from(stateSet),
     alphabet: Array.from(alphabetSet),
     tapeAlphabet: Array.from(tapeAlphabetSet),
@@ -185,7 +237,7 @@ export function parseDSLToConfig(text: string, id: string = 'custom'): ParseResu
     rejectStates,
     transitions,
     defaultInput,
-    testCases: []
+    testCases
   };
 
   return { config, errors, warnings };

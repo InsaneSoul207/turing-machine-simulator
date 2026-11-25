@@ -34,6 +34,10 @@ export interface TuringMachineConfig {
   transitions: Transition[];
   defaultInput: string;
   testCases: TestCase[];
+  isCustom?: boolean;
+  category?: string;
+  createdAt?: number;
+  algorithmSummary?: string;
 }
 
 export type MachineStatus = 'IDLE' | 'RUNNING' | 'PAUSED' | 'ACCEPTED' | 'REJECTED' | 'HALTED' | 'TIMEOUT';
