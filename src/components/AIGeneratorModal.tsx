@@ -79,15 +79,25 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
   // Check matching template
   const matchedTemplate = findMatchingTemplate(problemInput);
 
-  // Clean raw stream to remove thinking tags (<think>...</think>)
+  // Clean raw stream to remove thinking tags and conversational preamble
   const cleanDSL = React.useMemo(() => {
     let text = streamedDSL;
-    // If text contains unclosed <think>, everything after <think> is thinking
-    if (text.includes('<think>') && !text.includes('</think>')) {
-      return '';
-    }
+    // Strip <think> tags completely
     text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    // If inside unclosed <think>, wait
+    if (text.includes('<think>')) return '';
     text = text.replace(/```[a-z]*\n?/gi, '');
+    
+    // Slice off any conversational filler before "# Name:" or "initial:"
+    const nameIdx = text.indexOf('# Name:');
+    if (nameIdx !== -1) {
+      text = text.substring(nameIdx);
+    } else {
+      const initIdx = text.indexOf('initial:');
+      if (initIdx !== -1) {
+        text = text.substring(initIdx);
+      }
+    }
     return text.trim();
   }, [streamedDSL]);
 
@@ -336,7 +346,7 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
 
           {/* Provider Specific Configuration Bar */}
           {provider === 'ollama' && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-zinc-500 text-[11px]">Model:</span>
               {ollamaHealthy && ollamaModels.length > 0 ? (
                 <select
@@ -363,6 +373,9 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${checkingOllama ? 'animate-spin' : ''}`} />
               </button>
+              <span className="text-[10px] text-zinc-500 hidden xl:inline">
+                (Recommended: <code className="bg-zinc-100 px-1 rounded font-mono">llama3.2</code> or <code className="bg-zinc-100 px-1 rounded font-mono">qwen2.5-coder:1.5b</code> for 2s speed)
+              </span>
             </div>
           )}
 
