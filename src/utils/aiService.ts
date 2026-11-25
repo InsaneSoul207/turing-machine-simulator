@@ -111,11 +111,13 @@ export async function streamFromOllama(
     body: JSON.stringify({
       model,
       prompt,
+      system: 'You are an Automata Theory professor. Output ONLY the Turing Machine DSL specification. Do NOT include <think> tags, reasoning, or markdown fences. Start directly with # Name:.',
       stream: true,
       options: {
-        temperature: 0.2,
+        temperature: 0.1,
         top_p: 0.9,
-        num_predict: 2000,
+        num_predict: 800,
+        stop: ['\n\n\n\n', '# End', '```'],
       },
     }),
     signal,
@@ -146,7 +148,10 @@ export async function streamFromOllama(
           fullText += parsed.response;
           onChunk(parsed.response, parsed.done ?? false);
         }
-        if (parsed.done) break;
+        if (parsed.done) {
+          onChunk('', true);
+          return fullText;
+        }
       } catch {
         // partial json, ignore
       }
@@ -213,7 +218,10 @@ export async function streamFromOpenAICompat(
 
     for (const line of lines) {
       const dataStr = line.replace(/^data:\s*/, '').trim();
-      if (dataStr === '[DONE]') break;
+      if (dataStr === '[DONE]') {
+        onChunk('', true);
+        return fullText;
+      }
       try {
         const json = JSON.parse(dataStr);
         const delta = json.choices?.[0]?.delta?.content || '';

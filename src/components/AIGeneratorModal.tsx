@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X, Sparkles, Cpu, AlertTriangle, CheckCircle2,
   RefreshCw, ChevronDown, Loader2, StopCircle, Zap,
-  ArrowRight, BookmarkPlus, HelpCircle, Code, Layers, Check
+  ArrowRight, BookmarkPlus, HelpCircle, Code, Layers, Check,
+  Brain
 } from 'lucide-react';
 import { TuringMachineConfig } from '../types/tm';
 import {
@@ -40,8 +41,7 @@ const CURATED_PROBLEMS = [
     category: 'Arithmetic & Transducers',
     problems: [
       { label: "Two's Complement", prompt: "Turing Machine transducer to compute the 2's complement of an unsigned binary number" },
-      { label: 'Binary Increment (+1)', prompt: 'Turing Machine that adds 1 to an unsigned binary number on tape' },
-      { label: 'Unary Addition (1ᵐ + 1ⁿ)', prompt: 'Turing machine for unary addition: 1^m 0 1^n -> 1^(m+n)' }
+      { label: 'Binary Increment (+1)', prompt: 'Turing Machine that adds 1 to an unsigned binary number on tape' }
     ]
   }
 ];
@@ -52,7 +52,7 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
   onLoadConfig,
   onSaveAsPreset
 }) => {
-  const [provider, setProvider] = useState<ProviderMode>('ollama');
+  const [provider, setProvider] = useState<ProviderMode>('instant');
   const [ollamaEndpoint, setOllamaEndpoint] = useState<string>(DEFAULT_OLLAMA_ENDPOINT);
   const [ollamaHealthy, setOllamaHealthy] = useState<boolean>(false);
   const [checkingOllama, setCheckingOllama] = useState<boolean>(false);
@@ -67,16 +67,32 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
   // Input & Generation State
   const [problemInput, setProblemInput] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [isThinking, setIsThinking] = useState<boolean>(false);
   const [streamedDSL, setStreamedDSL] = useState<string>('');
   const [generationError, setGenerationError] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'preview' | 'dsl'>('preview');
   const [copiedPresetSuccess, setCopiedPresetSuccess] = useState<boolean>(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const dslRef = useRef<HTMLPreElement>(null);
+  const dslRef = useRef<HTMLTextAreaElement>(null);
+
+  // Check matching template
+  const matchedTemplate = findMatchingTemplate(problemInput);
+
+  // Clean raw stream to remove thinking tags (<think>...</think>)
+  const cleanDSL = React.useMemo(() => {
+    let text = streamedDSL;
+    // If text contains unclosed <think>, everything after <think> is thinking
+    if (text.includes('<think>') && !text.includes('</think>')) {
+      return '';
+    }
+    text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    text = text.replace(/```[a-z]*\n?/gi, '');
+    return text.trim();
+  }, [streamedDSL]);
 
   // Parse streamed DSL in real-time
-  const parseResult = parseDSLToConfig(streamedDSL.trim(), 'ai_generated');
+  const parseResult = parseDSLToConfig(cleanDSL || streamedDSL.trim(), 'ai_generated');
   const isValidConfig = parseResult.config && parseResult.errors.length === 0;
 
   // Check Ollama health on open
@@ -89,9 +105,9 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
         const models = await fetchOllamaModels(ollamaEndpoint);
         setOllamaModels(models);
         if (models.length > 0) {
-          // Auto-select preferred model (qwen, llama, deepseek, mistral)
+          // Auto-select preferred non-thinking model if available, or first
           const preferred = models.find(m =>
-            m.name.includes('qwen') || m.name.includes('llama') || m.name.includes('deepseek') || m.name.includes('mistral')
+            m.name.includes('llama3.1') || m.name.includes('qwen') || m.name.includes('mistral') || m.name.includes('deepseek')
           );
           setSelectedModel(preferred?.name || models[0].name);
         }
@@ -114,40 +130,67 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
     if (dslRef.current) {
       dslRef.current.scrollTop = dslRef.current.scrollHeight;
     }
-  }, [streamedDSL]);
+  }, [cleanDSL]);
 
   // Handle Generate
-  const handleGenerate = async () => {
+  const handleGenerate = async (forceInstant: boolean = false) => {
     if (!problemInput.trim() || isGenerating) return;
 
     setGenerationError('');
-    setStreamedDSL('');
     setIsGenerating(true);
-    abortControllerRef.current = new AbortController();
+    setIsThinking(false);
 
-    // 1. Instant heuristic check if user selected offline or if Ollama is not running and user wants quick template
-    if (provider === 'instant') {
+    // 1. If instant requested or matched template exists and instant mode
+    if (forceInstant || provider === 'instant') {
       const matched = findMatchingTemplate(problemInput);
       if (matched) {
         setStreamedDSL(matched);
         setIsGenerating(false);
+        setActiveTab('preview');
         return;
       }
     }
+
+    setStreamedDSL('');
+    abortControllerRef.current = new AbortController();
+
+    // Safety timeout after 25 seconds
+    const timeoutId = setTimeout(() => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        setGenerationError('Generation timed out. Switched to verified solution.');
+        const fallback = findMatchingTemplate(problemInput);
+        if (fallback) setStreamedDSL(fallback);
+        setIsGenerating(false);
+        setIsThinking(false);
+      }
+    }, 25000);
 
     try {
       const prompt = buildTuringMachinePrompt(problemInput.trim());
 
       if (provider === 'ollama') {
         if (!selectedModel) {
-          throw new Error('Please select an Ollama model, or switch to Instant/Cloud mode.');
+          throw new Error('Please select an Ollama model, or click Instant Verified Solution.');
         }
+
+        let accumulated = '';
         await streamFromOllama(
           ollamaEndpoint,
           selectedModel,
           prompt,
-          (chunk) => {
-            setStreamedDSL(prev => prev + chunk);
+          (chunk, isDone) => {
+            accumulated += chunk;
+            if (accumulated.includes('<think>') && !accumulated.includes('</think>')) {
+              setIsThinking(true);
+            } else {
+              setIsThinking(false);
+            }
+            setStreamedDSL(accumulated);
+            if (isDone) {
+              setIsGenerating(false);
+              setIsThinking(false);
+            }
           },
           abortControllerRef.current.signal
         );
@@ -155,23 +198,27 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
         if (!cloudApiKey.trim()) {
           throw new Error('Please enter an API Key for cloud generation.');
         }
+        let accumulated = '';
         await streamFromOpenAICompat(
           cloudEndpoint,
           cloudApiKey.trim(),
           cloudModel.trim(),
           prompt,
-          (chunk) => {
-            setStreamedDSL(prev => prev + chunk);
+          (chunk, isDone) => {
+            accumulated += chunk;
+            setStreamedDSL(accumulated);
+            if (isDone) {
+              setIsGenerating(false);
+            }
           },
           abortControllerRef.current.signal
         );
       } else {
-        // Fallback to offline template or advice
         const matched = findMatchingTemplate(problemInput);
         if (matched) {
           setStreamedDSL(matched);
         } else {
-          throw new Error('No offline template matched this prompt. Please select Ollama or Cloud mode for custom generation.');
+          throw new Error('No template matched. Select Local Ollama or Cloud API for custom generation.');
         }
       }
     } catch (err: any) {
@@ -179,20 +226,22 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
         // User stopped generation
       } else {
         setGenerationError(err.message || 'Generation failed');
-        // If error occurred and an offline template matches, offer fallback
         const fallback = findMatchingTemplate(problemInput);
         if (fallback) {
           setStreamedDSL(fallback);
         }
       }
     } finally {
+      clearTimeout(timeoutId);
       setIsGenerating(false);
+      setIsThinking(false);
     }
   };
 
   const handleStop = () => {
     abortControllerRef.current?.abort();
     setIsGenerating(false);
+    setIsThinking(false);
   };
 
   const handleLoad = () => {
@@ -254,30 +303,30 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
         <div className="px-5 py-2 border-b border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-1.5 p-0.5 bg-zinc-200/70 rounded-lg">
             <button
+              onClick={() => setProvider('instant')}
+              className={`px-3 py-1 rounded-md font-medium transition-all ${
+                provider === 'instant'
+                  ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              Instant 0s Library ⚡
+            </button>
+            <button
               onClick={() => setProvider('ollama')}
               className={`px-3 py-1 rounded-md font-medium transition-all ${
                 provider === 'ollama'
-                  ? 'bg-white text-zinc-900 shadow-xs'
+                  ? 'bg-white text-zinc-900 shadow-xs font-semibold'
                   : 'text-zinc-600 hover:text-zinc-900'
               }`}
             >
               Local Ollama {ollamaHealthy && '🟢'}
             </button>
             <button
-              onClick={() => setProvider('instant')}
-              className={`px-3 py-1 rounded-md font-medium transition-all ${
-                provider === 'instant'
-                  ? 'bg-white text-zinc-900 shadow-xs'
-                  : 'text-zinc-600 hover:text-zinc-900'
-              }`}
-            >
-              Instant Offline Library ⚡
-            </button>
-            <button
               onClick={() => setProvider('cloud')}
               className={`px-3 py-1 rounded-md font-medium transition-all ${
                 provider === 'cloud'
-                  ? 'bg-white text-zinc-900 shadow-xs'
+                  ? 'bg-white text-zinc-900 shadow-xs font-semibold'
                   : 'text-zinc-600 hover:text-zinc-900'
               }`}
             >
@@ -350,7 +399,7 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
                 value={problemInput}
                 onChange={(e) => setProblemInput(e.target.value)}
                 placeholder="Describe your Turing Machine problem in plain English...&#10;&#10;e.g.:&#10;• 'Design a TM for strings over {a,b,c} with equal count of a, b, c'&#10;• 'TM that checks if binary string is palindrome'&#10;• 'Compute 2s complement of a binary number'"
-                className="w-full h-32 p-3 text-xs text-zinc-900 bg-zinc-50 border border-zinc-300 rounded-lg focus:outline-none focus:bg-white focus:border-zinc-500 resize-none font-sans leading-relaxed"
+                className="w-full h-28 p-3 text-xs text-zinc-900 bg-zinc-50 border border-zinc-300 rounded-lg focus:outline-none focus:bg-white focus:border-zinc-500 resize-none font-sans leading-relaxed"
                 disabled={isGenerating}
               />
             </div>
@@ -358,7 +407,7 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
             {/* Curated Problem Category Chips */}
             <div className="space-y-2">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 block">
-                Quick Problem Examples:
+                Click to load instant solution:
               </span>
               <div className="space-y-2">
                 {CURATED_PROBLEMS.map((cat, idx) => (
@@ -368,8 +417,15 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
                       {cat.problems.map((p, pIdx) => (
                         <button
                           key={pIdx}
-                          onClick={() => setProblemInput(p.prompt)}
-                          className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-[11px] font-medium border border-zinc-200 transition-colors text-left"
+                          onClick={() => {
+                            setProblemInput(p.prompt);
+                            const match = findMatchingTemplate(p.prompt);
+                            if (match) {
+                              setStreamedDSL(match);
+                              setActiveTab('preview');
+                            }
+                          }}
+                          className="px-2.5 py-1 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-[11px] font-medium border border-zinc-200 transition-colors text-left"
                         >
                           {p.label}
                         </button>
@@ -388,8 +444,21 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
               </div>
             )}
 
-            {/* Primary Action Button */}
-            <div className="mt-auto pt-2">
+            {/* Primary Action Buttons */}
+            <div className="mt-auto pt-2 space-y-2">
+              {matchedTemplate && !isGenerating && (
+                <button
+                  onClick={() => {
+                    setStreamedDSL(matchedTemplate);
+                    setActiveTab('preview');
+                  }}
+                  className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                >
+                  <Zap className="w-4 h-4 text-amber-300" />
+                  Load Instant Verified Solution (0s)
+                </button>
+              )}
+
               {isGenerating ? (
                 <button
                   onClick={handleStop}
@@ -399,12 +468,12 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
                 </button>
               ) : (
                 <button
-                  onClick={handleGenerate}
+                  onClick={() => handleGenerate(false)}
                   disabled={!problemInput.trim()}
                   className="w-full py-2.5 px-4 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors shadow-xs"
                 >
                   <Sparkles className="w-4 h-4 text-amber-300" />
-                  Generate Turing Machine & Transitions
+                  {provider === 'instant' ? 'Generate Solution' : 'Run AI Model'}
                 </button>
               )}
             </div>
@@ -439,9 +508,14 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
 
               {/* Status Indicator */}
               <div className="flex items-center gap-1.5 text-xs">
-                {isGenerating && (
+                {isThinking && (
+                  <span className="flex items-center gap-1.5 text-violet-700 font-medium text-[11px] bg-violet-50 px-2 py-0.5 rounded border border-violet-200 animate-pulse">
+                    <Brain className="w-3.5 h-3.5 text-violet-600" /> Reasoning & Designing States...
+                  </span>
+                )}
+                {isGenerating && !isThinking && (
                   <span className="flex items-center gap-1 text-zinc-600 font-mono text-[11px]">
-                    <Loader2 className="w-3 h-3 animate-spin text-zinc-900" /> Generating...
+                    <Loader2 className="w-3 h-3 animate-spin text-zinc-900" /> Writing Transitions...
                   </span>
                 )}
                 {isValidConfig && !isGenerating && (
@@ -455,12 +529,20 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
             {/* Tab 1: Preview & Theory Breakdown */}
             {activeTab === 'preview' && (
               <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-                {!streamedDSL ? (
+                {isThinking ? (
+                  <div className="h-64 flex flex-col items-center justify-center text-center p-6 bg-white rounded-xl border border-zinc-200">
+                    <Brain className="w-10 h-10 mb-3 text-violet-500 animate-bounce" />
+                    <p className="text-xs font-semibold text-zinc-800">AI is thinking & planning the state machine...</p>
+                    <p className="text-[11px] text-zinc-400 mt-1 max-w-sm">
+                      Formulating the head movement strategy and states for your problem. The transitions will appear in seconds.
+                    </p>
+                  </div>
+                ) : !cleanDSL ? (
                   <div className="h-64 flex flex-col items-center justify-center text-center p-6 text-zinc-400">
                     <Layers className="w-10 h-10 mb-2 text-zinc-300" />
                     <p className="text-xs font-medium text-zinc-600">No machine generated yet</p>
                     <p className="text-[11px] text-zinc-400 max-w-sm mt-1">
-                      Type your problem statement on the left and click Generate to see the formal 7-tuple parameters, algorithm strategy, and transitions.
+                      Type your problem statement on the left or click any quick example to generate the formal 7-tuple and transitions.
                     </p>
                   </div>
                 ) : (
@@ -552,8 +634,8 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
             {activeTab === 'dsl' && (
               <div className="flex-1 flex flex-col min-h-0">
                 <textarea
-                  ref={dslRef as any}
-                  value={streamedDSL}
+                  ref={dslRef}
+                  value={cleanDSL}
                   onChange={(e) => setStreamedDSL(e.target.value)}
                   placeholder="# Transitions and machine specification will appear here..."
                   className="flex-1 w-full bg-zinc-900 text-zinc-100 p-3 rounded-lg font-mono text-xs leading-relaxed resize-none focus:outline-none scrollbar-thin"
